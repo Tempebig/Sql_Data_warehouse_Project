@@ -1,0 +1,364 @@
+---Data clinaing
+--check for nulls or duplicates in praimary key 
+--expection : no result
+
+select
+cst_id,
+COUNT(*)
+ from bronze.crm_cust_info
+ group by cst_id
+ having COUNT(*)>1 or cst_id is null
+
+ ---fixing 
+
+ select * from bronze.crm_cust_info
+ where cst_id=29466
+ --- in this case i l look to the date  column and get the letast one
+ 
+ --- assigns a unique number to each row in a result set , based o a defined order
+ select
+ *
+ from
+ (
+  select 
+   *
+   , ROW_NUMBER() over (partition by cst_id  order by cst_create_date desc) as flag_last
+   from bronze.crm_cust_info) t
+                 where flag_last =1 and cst_id= 29466;
+
+-----check for unwanted Spaces
+--  check all string column in table
+select
+cst_fristname
+from bronze.crm_cust_info
+where cst_fristname != TRIM(cst_fristname)
+
+-----start fixaing 
+
+select 
+cst_id,
+cst_key,
+trim(cst_fristname) as cst_firstname,
+trim(cst_lastname) as cst_lasname,
+cst_material_status,
+cst_fgndr,
+cst_create_date
+from  
+ (
+  select 
+   *
+   , ROW_NUMBER() over (partition by cst_id  order by cst_create_date desc) as flag_last
+   from bronze.crm_cust_info
+   where cst_id is not null
+   ) t
+                 where flag_last =1
+--- chek the consistency of values in low cardinality columns (gender--marital staus)
+select distinct cst_fgndr
+from bronze.crm_cust_info
+-- isert the data in sliver layer
+truncate table sliver.crm_cust_info;
+insert into sliver.crm_cust_info(
+cst_id,
+cst_key,
+cst_fristname,
+cst_lastname,
+cst_material_status,
+cst_fgndr,
+cst_create_date)
+
+select 
+cst_id,
+cst_key,
+trim(cst_fristname) as cst_firstname,
+trim(cst_lastname) as cst_lasname,
+case when UPPER(trim( cst_material_status))='S' then 'Single'
+when  UPPER(trim (cst_material_status))='M' then 'Married'
+else 'n/a'
+end cst_material_status,
+
+case when UPPER(trim( cst_fgndr))='F' then 'Female'--
+when  UPPER(trim (cst_fgndr))='M' then 'Male'---
+else 'n/a'
+end cst_fgndr,---normalization & standardization
+cst_create_date
+from  
+ (
+  select 
+   *
+   , ROW_NUMBER() over (partition by cst_id  order by cst_create_date desc) as flag_last
+   from bronze.crm_cust_info
+   where cst_id is not null
+   ) t
+                 where flag_last =1
+
+				 select * from sliver.crm_cust_info;
+--------move to next table --product info 
+ select 
+ prd_id,
+ count(*)
+ from bronze.crm_prd_info
+ group by prd_id
+ having COUNT(*) >1 or prd_id is null
+
+
+ --
+  select 
+  prd_id,
+  prd_key,             
+ replace (SUBSTRING(prd_key,1,5),'-','_') as cat_id,-- creat new id column and replace the '-' with '_' to match the id in the  catgoery table
+  prd_nm,
+  prd_cost
+  ,prd_lin,
+  prd_start_dt,
+  prd_end_dt
+  from
+  bronze.crm_prd_info
+  where replace (SUBSTRING(prd_key,1,5),'-','_') not in 
+ --check
+ (select distinct id from bronze.erp_PX_CAT_G1V2)
+ --------
+ select 
+  prd_id,
+  prd_key,             
+ replace (SUBSTRING(prd_key,1,5),'-','_') as cat_id,
+ SUBSTRING(prd_key,7,LEN(prd_key)) as prd_key,
+  prd_nm,
+  prd_cost
+  ,prd_lin,
+  prd_start_dt,
+  prd_end_dt
+  from
+  bronze.crm_prd_info
+
+  --- check for nulls or negative numbers
+  select prd_cost
+  from bronze.crm_prd_info
+  where prd_cost <0 or prd_cost is null
+  ---replce nulls with zero
+  select 
+  prd_id,
+  prd_key,             
+ replace (SUBSTRING(prd_key,1,5),'-','_') as cat_id,
+ SUBSTRING(prd_key,7,LEN(prd_key)) as prd_key,
+  prd_nm,
+ ISNULL( prd_cost,0) as prd_cost,
+  prd_lin,
+  prd_start_dt,
+  prd_end_dt
+  from
+  bronze.crm_prd_info
+
+  --chek the prd_in
+  select distinct prd_lin
+  from bronze.crm_prd_info 
+  ---replce prd_in vluves with maingfull values
+   select 
+  prd_id,
+  prd_key,             
+ replace (SUBSTRING(prd_key,1,5),'-','_') as cat_id,
+ SUBSTRING(prd_key,7,LEN(prd_key)) as prd_key,
+  prd_nm,
+ ISNULL( prd_cost,0) as prd_cost,
+  case when UPPER(TRIM(prd_lin))= 'M' then 'Mountain'
+       when UPPER(TRIM(prd_lin))= 'R' then 'Road'
+	   when UPPER(TRIM(prd_lin))= 'S' then 'other sales'
+	   when UPPER(TRIM(prd_lin))= 'T' then 'Touring'
+	   else 'n/a'
+	   end as   prd_lin,
+  prd_start_dt,
+  prd_end_dt
+  from
+  bronze.crm_prd_info
+
+  --- check for invalid date orders
+  select * from bronze.crm_prd_info
+  where prd_end_dt < prd_start_dt
+
+  -- isert the new date 
+  truncate table sliver.crm_prd_info;
+ insert into  sliver.crm_prd_info(
+ prd_id ,
+ cat_id ,
+ prd_key ,
+ prd_nm ,
+ prd_cost ,
+ prd_lin ,
+ prd_start_dt ,
+ prd_end_dt
+ )
+  select 
+  prd_id,           
+ replace (SUBSTRING(prd_key,1,5),'-','_') as cat_id,
+ SUBSTRING(prd_key,7,LEN(prd_key)) as prd_key,
+  prd_nm,
+ ISNULL( prd_cost,0) as prd_cost,
+  case when UPPER(TRIM(prd_lin))= 'M' then 'Mountain'
+       when UPPER(TRIM(prd_lin))= 'R' then 'Road'
+	   when UPPER(TRIM(prd_lin))= 'S' then 'other sales'
+	   when UPPER(TRIM(prd_lin))= 'T' then 'Touring'
+	   else 'n/a'
+	   end as   prd_lin,--- Map product line codes to descrptive values
+  prd_start_dt,
+  DATEADD(DAY, -1, LEAD(prd_start_dt) OVER (PARTITION BY prd_key ORDER BY prd_start_dt)) AS prd_end_dt
+  from
+  bronze.crm_prd_info
+
+
+-----------  sales Details table 
+
+select * from bronze.crm_sales_details
+where sls_ord_num !=TRIM(sls_ord_num)
+--check the intgerty
+select * from bronze.crm_sales_details
+where sls_prd_key not in (select prd_key from sliver.crm_prd_info)
+
+---------check the intgerty 
+select * from bronze.crm_sales_details
+where sls_cust_id not in (select cat_id from sliver.crm_prd_info)
+----cheng the data type of date column
+select 
+sls_ord_num,
+sls_prd_key,
+nullif (sls_order_dt,0) sls_order_dt
+from bronze.crm_sales_details
+where sls_order_dt <=0 or LEN(sls_order_dt) !=8 or
+sls_order_dt>20500101;
+
+---
+
+select 
+sls_ord_num,
+sls_prd_key,
+sls_cust_id,
+case when sls_order_dt = 0 or LEN(sls_order_dt) !=8 then null
+else cast(cast(sls_order_dt AS varchar) as date)
+end as sls_order_dt,
+case when sls_ship_dt = 0 or LEN(sls_ship_dt) !=8 then null
+else cast(cast(sls_ship_dt AS varchar) as date)
+end as sls_ship_dt,
+case when sls_due_dt = 0 or LEN(sls_due_dt) !=8 then null
+else cast(cast(sls_due_dt AS varchar) as date)
+end as sls_due_dt,
+sls_sales,
+sls_quantity,
+sls_price
+from bronze.crm_sales_details
+
+---check Data consistency: beteen sales, Quantity, price
+--->>the role is : sales = Quantity* price 
+--->> values must not be null,zero, or negative.
+select distinct
+sls_sales as oldesales,
+sls_quantity,
+sls_price as oldprice,
+case when sls_sales is null OR sls_sales <=0 OR sls_sales != sls_quantity* ABS(sls_price)
+then sls_quantity* ABS(sls_price)
+else sls_sales
+end sls_sales,
+case when sls_price IS  null OR sls_price <=0
+then sls_sales/ nullif(sls_quantity,0)
+else sls_price
+end as sls_price
+from bronze.crm_sales_details
+where sls_sales != sls_quantity * sls_price
+or sls_sales is null or sls_quantity is null or sls_price is null
+or sls_sales <= 0 or sls_quantity <= 0 or sls_price <= 0
+order by sls_sales,sls_quantity, sls_price
+---------
+truncate table sliver.crm_sales_details;
+insert into sliver.crm_sales_details(
+sls_ord_num ,
+sls_prd_key ,
+sls_cust_id,
+sls_order_dt ,
+sls_ship_dt ,
+sls_due_dt ,
+sls_sales ,
+sls_quantity ,
+sls_price 
+
+
+)
+select 
+sls_ord_num,
+sls_prd_key,
+sls_cust_id,
+case when sls_order_dt = 0 or LEN(sls_order_dt) !=8 then null
+else cast(cast(sls_order_dt AS varchar) as date)
+end as sls_order_dt,
+case when sls_ship_dt = 0 or LEN(sls_ship_dt) !=8 then null
+else cast(cast(sls_ship_dt AS varchar) as date)
+end as sls_ship_dt,
+case when sls_due_dt = 0 or LEN(sls_due_dt) !=8 then null
+else cast(cast(sls_due_dt AS varchar) as date)
+end as sls_due_dt,
+case when sls_sales is null OR sls_sales <=0 OR sls_sales != sls_quantity* ABS(sls_price)
+then sls_quantity* ABS(sls_price)
+else sls_sales
+end sls_sales,
+sls_quantity,
+case when sls_price IS  null OR sls_price <=0
+then sls_sales/ nullif(sls_quantity,0)
+else sls_price
+end as sls_price
+from bronze.crm_sales_details
+
+--- clean the erp customer table 
+truncate table sliver.erp_CUST_AZ12;
+insert into sliver.erp_CUST_AZ12(cid, bdate,gen)
+ select
+ case when CID like 'NAS%' then SUBSTRING(CID ,4,LEN(cid))
+ else CID 
+ end cid,
+ case when BDATE > GETDATE() then null 
+ else BDATE
+ end  BDATE,
+   case when upper (trim(gen)) in ('F','FEMALE') then 'Female'
+        when upper (trim(gen)) in ('M','MALE') then 'Male'
+		else 'n/a'
+		end as gen
+ from bronze.erp_CUST_AZ12
+
+ --- identify out--of range dates
+ select distinct  bdate 
+ from bronze.erp_CUST_AZ12
+ where BDATE < '1924-01-01' or BDATE > GETDATE()
+ ----check the gender 
+  select distinct 
+  GEN,
+  case when upper (trim(gen)) in ('F','FEMALE') then 'Female'
+        when upper (trim(gen)) in ('M','MALE') then 'Male'
+		else 'n/a'
+		end as gen
+ from bronze.erp_CUST_AZ12
+ ------------- replace '-' in cid in erp_loc_a101 table 
+ truncate table sliver.erp_LOC_A101;
+ insert into sliver.erp_LOC_A101(cid,cntry)
+ select 
+ REPLACE(CID,'-','') cid ,
+ case when TRIM(cntry)= 'DE' then 'Germany'
+      when TRIM(CNTRY) IN  ('US','USA') then 'United States'
+	  when TRIM(CNTRY)= '' OR  CNTRY IS null then 'n/a'
+	  else TRIM (CNTRY)
+	  end as  CNTRY
+ from bronze.erp_LOC_A101;
+
+ --- Data Standardization & Consistency
+ select distinct cntry from bronze.erp_LOC_A101
+
+ --- check for unwanted spaces 
+ select * from bronze.erp_PX_CAT_G1V2
+ where CAT != TRIM(CAT) or SUBCAT !=TRIM(SUBCAT) or MAINTENANCE !=TRIM(MAINTENANCE)
+
+ ---- Data standradization & and consistency
+ select distinct
+ MAINTENANCE,CAT
+ from bronze.erp_PX_CAT_G1V2
+ --- load to sliver lyaer
+ truncate table sliver.erp_PX_CAT_G1V2
+ insert into sliver.erp_PX_CAT_G1V2(ID,CAT, SUBCAT, MAINTENANCE)
+ select ID,CAT, SUBCAT, MAINTENANCE 
+ 
+ from bronze.erp_PX_CAT_G1V2
+
+ select * from sliver.erp_PX_CAT_G1V2
